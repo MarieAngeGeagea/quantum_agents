@@ -759,6 +759,451 @@ class QLearningCartpoleClassical(QLearning):
                 self.save_data(meta, scores)
 
 
+class QLearningMountainCar(QLearning):
+    def __init__(
+            self,
+            hyperparams,
+            env_name,
+            save=True,
+            save_as=None,
+            test=False,
+            path=BASE_PATH):
+
+        super(QLearningMountainCar, self).__init__(hyperparams, env_name, save, save_as, path, test)
+
+        self.env = gym.make(env_name.value)
+        self.max_steps = 200
+        self.action_space = self.env.action_space.n
+        self.observation_space = self.env.observation_space.shape[0]
+        self.readout_op = self.initialize_readout()
+        self.qubits = [cirq.GridQubit(0, i) for i in range(self.observation_space)]
+
+        self.interaction = namedtuple('interaction', ('state', 'action', 'reward', 'next_state', 'done'))
+
+        self.learning_rate_in = hyperparams.get('learning_rate_in')
+        self.learning_rate_out = hyperparams.get('learning_rate_out')
+        self.optimizer_input = tf.keras.optimizers.Adam(learning_rate=self.learning_rate_in)
+        self.optimizer_output = tf.keras.optimizers.Adam(learning_rate=self.learning_rate_out)
+        self.loss_fun = tf.keras.losses.mse
+        self.use_negative_rewards = hyperparams.get('use_negative_rewards', False)
+        self.use_reuploading = hyperparams.get('use_reuploading', True)
+        self.trainable_scaling = hyperparams.get('trainable_scaling', True)
+        self.trainable_output = hyperparams.get('trainable_output', True)
+        self.output_factor = hyperparams.get('output_factor', 1)
+
+        self.w_input, self.w_var, self.w_output = 1, 0, 2
+        self.model, self.target_model, self.circuit = self.initialize_models()
+
+    def initialize_readout(self):
+        qubits = [cirq.GridQubit(0, i) for i in range(self.observation_space)]
+        readout_op = [cirq.Z(qubits[0]) * cirq.Z(qubits[1]),
+                      cirq.Z(qubits[0]),
+                      cirq.Z(qubits[1])
+        ]
+        return readout_op
+
+    def initialize_models(self):
+        circuit, param_dim, param_symbols, input_symbols = self.create_circuit()
+        model = generate_model(
+            self.observation_space, self.circuit_depth, circuit,
+            param_dim, param_symbols, input_symbols, self.readout_op, False,
+            self.trainable_scaling, self.use_reuploading,
+            self.trainable_output, self.output_factor)
+        target_model = generate_model(
+            self.observation_space, self.circuit_depth, circuit,
+            param_dim, param_symbols, input_symbols, self.readout_op, True,
+            self.trainable_scaling, self.use_reuploading,
+            self.trainable_output, self.output_factor)
+        target_model.set_weights(model.get_weights())
+
+        return model, target_model, circuit
+
+    def create_circuit(self):
+        circuit, param_dim, param_symbols, input_symbols = generate_circuit(
+            self.observation_space, self.circuit_depth, self.qubits,
+            use_reuploading=self.use_reuploading)
+        return circuit, param_dim, param_symbols, input_symbols
+
+    def save_env_data(self, state_history):
+        with open(self.path + '{}_states.pickle'.format(self.save_as), 'wb') as file:
+            pickle.dump(state_history, file)
+
+    def add_to_memory(self, state, action, reward, next_state, done):
+        transition = self.interaction(
+            state, action, reward, next_state, float(done))
+        self.memory.append(transition)
+
+    def perform_action(self, state):
+        action_type = 'random'
+        if np.random.random() < self.epsilon:
+            action = self.env.action_space.sample()
+        else:
+            state = tf.convert_to_tensor(state)
+            state = tf.expand_dims(state, 0)
+            q_vals = self.model([empty_circuits(1), state])
+            action = int(tf.argmax(q_vals[0]).numpy())
+            action_type = 'argmax'
+
+        return action, action_type
+
+    def train_step(self):
+        training_batch = random.choices(self.memory, k=self.batch_size)
+        training_batch = self.interaction(*zip(*training_batch))
+
+        states = np.asarray([x for x in training_batch.state])
+        rewards = np.asarray([x for x in training_batch.reward], dtype=np.float32)
+        next_states = np.asarray([x for x in training_batch.next_state])
+        done = np.asarray([x for x in training_batch.done], dtype=np.float32)
+
+        states = tf.convert_to_tensor(states)
+        rewards = tf.convert_to_tensor(rewards)
+        next_states = tf.convert_to_tensor(next_states)
+        done = tf.convert_to_tensor(done)
+
+        future_rewards = self.target_model([empty_circuits(self.batch_size), next_states])
+        target_q_values = rewards + (
+                self.gamma * tf.reduce_max(future_rewards, axis=1) * (1.0 - done))
+        masks = tf.one_hot(training_batch.action, self.action_space)
+
+        with tf.GradientTape() as tape:
+            tape.watch(self.model.trainable_variables)
+            q_values = self.model([empty_circuits(self.batch_size), states])
+            q_values_masked = tf.reduce_sum(tf.multiply(q_values, masks), axis=1)
+            loss = self.loss_fun(target_q_values, q_values_masked)
+        
+        optimizers = [self.optimizer]
+        weights = [self.w_var]
+
+        if self.trainable_scaling:
+            optimizers.append(self.optimizer_input)
+            weights.append(self.w_input)
+
+        if self.trainable_output:
+            optimizers.append(self.optimizer_output)
+            weights.append(self.w_output if self.trainable_scaling else self.w_input)
+
+        grads = tape.gradient(loss, self.model.trainable_variables)
+        for optimizer, w in zip(optimizers, weights):
+            optimizer.apply_gradients([(grads[w], self.model.trainable_variables[w])])
+
+    def perform_episodes(self):
+        meta = {
+            'episodes': self.episodes,
+            'batch_size': self.batch_size,
+            'gamma': self.gamma,
+            'circuit_depth': self.circuit_depth,
+            'update_after': self.update_after,
+            'update_target_after': self.update_target_after,
+            'last_epsilon': self.epsilon,
+            'epsilon': self.epsilon,
+            'epsilon_schedule': self.epsilon_schedule,
+            'epsilon_min': self.epsilon_min,
+            'epsilon_decay': self.epsilon_decay,
+            'learning_rate': self.learning_rate,
+            'learning_rate_in': self.learning_rate_in,
+            'learning_rate_out': self.learning_rate_out,
+            'use_negative_rewards': self.use_negative_rewards,
+            'use_reuploading': self.use_reuploading,
+            'trainable_scaling': self.trainable_scaling,
+            'trainable_output': self.trainable_output,
+            'output_factor': self.output_factor,
+            'env_solved_at': []
+        }
+
+        scores = []
+        recent_scores = []
+
+        if self.epsilon_schedule == 'linear':
+            eps_values = list(np.linspace(self.epsilon, self.epsilon_min, self.episodes)[::-1])
+
+        solved = False
+        for episode in range(self.episodes):
+            if solved:
+                break
+
+            state = self.env.reset()
+            total_reward = 0
+            for iteration in range(self.max_steps):
+                # self.env.render()
+
+                old_state = state
+                action, action_type = self.perform_action(state)
+
+                state, reward, done, _ = self.env.step(action)
+                # Explicitly check if the position is >= 0.5 (goal position)
+                if state[0] >= 0.5:  # state[0] is the position in Mountain Car
+                    done = True
+                    reward += 100  # Optionally, give a bonus reward for reaching the goal
+                car_position = state[0]  # Update car position after each step
+                total_reward += reward  # Accumulate total reward for this episode
+                
+
+                #if self.use_negative_rewards:
+                #    if done and iteration < 199:
+                #        reward *= -1
+
+                self.add_to_memory(old_state, action, reward, state, done)
+
+                #if done:
+                #    scores.append(iteration + 1)
+                #    meta['last_epsilon'] = self.epsilon
+
+                #    if len(scores) > 100:
+                #        recent_scores = scores[-100:]
+
+                #    avg_score = np.mean(recent_scores) if recent_scores else np.mean(scores)
+                #    print(
+                #        "\rEpisode {:03d} , epsilon={:.4f}, action type={}, score={:03d}, avg score={:.3f}".format(
+                #            episode, self.epsilon, action_type, iteration + 1, avg_score))
+
+                #    break
+
+                if len(self.memory) >= self.batch_size and iteration % self.update_after == 0:
+                    # print("Train step outer")
+                    self.train_step()
+
+                if iteration % self.update_target_after == 0:
+                    self.target_model.set_weights(self.model.get_weights())
+                
+                if done:
+                    break
+
+            #if np.mean(recent_scores) >= 195:
+            #    print("\nEnvironment solved in {} episodes.".format(episode), end="")
+            #    meta['env_solved_at'].append(episode)
+            #    solved = True
+            
+            # Record the total reward for the episode
+            scores.append(total_reward)
+            recent_scores = scores[-100:]  # Keep track of the last 100 scores
+            avg_score = np.mean(recent_scores)
+
+            print(
+                f"Episode {episode:03d}, epsilon={self.epsilon:.4f}, action type={action_type}, "
+                f"score={total_reward:.2f}, avg score={avg_score:.2f}, position={car_position:.2f}"
+            )
+
+
+            # Check if the environment is solved
+            if len(recent_scores) >= 100 and avg_score >= -110.0:
+                print(f"\nEnvironment solved in {episode + 1} episodes!")
+                meta['env_solved_at'].append(episode)
+                solved = True
+
+            if self.epsilon_schedule == 'fast':
+                self.epsilon = max(self.epsilon_min, self.epsilon_decay * self.epsilon)
+            elif self.epsilon_schedule == 'linear':
+                self.epsilon = eps_values.pop()
+
+            if self.save:
+                self.save_data(meta, scores)
+
+
+class QLearningMountainCarClassical(QLearning):
+    def __init__(
+            self,
+            hyperparams,
+            env_name,
+            save=True,
+            save_as=None,
+            test=False,
+            path=BASE_PATH):
+
+        super(QLearningMountainCarClassical, self).__init__(
+            hyperparams, env_name, save, save_as, path, test)
+
+        self.env = gym.make(env_name.value)
+        self.max_steps = 200
+        self.action_space = self.env.action_space.n
+        self.observation_space = self.env.observation_space.shape[0]
+
+        self.n_hidden_layers = hyperparams.get('n_hidden_layers')
+        self.hidden_layer_config = hyperparams.get('hidden_layer_config')
+
+        self.interaction = namedtuple('interaction', ('state', 'action', 'reward', 'next_state', 'done'))
+        self.loss_fun = tf.keras.losses.mse
+        self.use_negative_rewards = hyperparams.get('use_negative_rewards', False)
+
+        self.model, self.target_model = self.initialize_models()
+
+    def initialize_models(self):
+        model = Sequential()
+        target_model = Sequential()
+
+        model.add(
+            Dense(
+                self.hidden_layer_config[0], input_shape=(self.observation_space,), activation='relu'))
+
+        target_model.add(
+            Dense(
+                self.hidden_layer_config[0], input_shape=(self.observation_space,), activation='relu'))
+
+        for i in range(1, self.n_hidden_layers):
+            model.add(Dense(self.hidden_layer_config[i], activation='relu'))
+            target_model.add(Dense(self.hidden_layer_config[i], activation='relu'))
+
+        model.add(Dense(self.action_space, activation='linear'))
+        target_model.add(Dense(self.action_space, activation='linear'))
+
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(lr=self.learning_rate), loss=self.loss_fun, metrics=[])
+        model.build()
+
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(lr=self.learning_rate), loss=self.loss_fun, metrics=[])
+        model.build()
+
+        weights = model.get_weights()
+        target_model.set_weights(weights)
+
+        print(model.summary())
+
+        return model, target_model
+
+    def add_to_memory(self, state, action, reward, next_state, done):
+        transition = self.interaction(
+            state, action, reward, next_state, float(done))
+        self.memory.append(transition)
+
+    def perform_action(self, state):
+        action_type = 'random'
+        if np.random.random() < self.epsilon:
+            action = self.env.action_space.sample()
+        else:
+            q_vals = self.model(np.asarray([state]))
+            action = int(tf.argmax(q_vals[0]).numpy())
+            action_type = 'argmax'
+
+        return action, action_type
+
+    def train_step(self):
+        training_batch = random.choices(self.memory, k=self.batch_size)
+        training_batch = self.interaction(*zip(*training_batch))
+
+        states = np.asarray([x for x in training_batch.state])
+        rewards = np.asarray([x for x in training_batch.reward], dtype=np.float32)
+        next_states = np.asarray([x for x in training_batch.next_state])
+        done = np.asarray([x for x in training_batch.done], dtype=np.float32)
+
+        future_rewards = self.target_model([next_states])
+        target_q_values = rewards + (
+                self.gamma * tf.reduce_max(future_rewards, axis=1) * (1.0 - done))
+        masks = tf.one_hot(training_batch.action, self.action_space)
+
+        with tf.GradientTape() as tape:
+            tape.watch(self.model.trainable_variables)
+            q_values = self.model([states])
+            q_values_masked = tf.reduce_sum(tf.multiply(q_values, masks), axis=1)
+            loss = tf.keras.losses.mse(target_q_values, q_values_masked)
+
+        grads = tape.gradient(loss, self.model.trainable_variables)
+        self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
+
+    def perform_episodes(self):
+        meta = {
+            'episodes': self.episodes,
+            'batch_size': self.batch_size,
+            'gamma': self.gamma,
+            'update_after': self.update_after,
+            'update_target_after': self.update_target_after,
+            'last_epsilon': self.epsilon,
+            'epsilon': self.epsilon,
+            'epsilon_schedule': self.epsilon_schedule,
+            'epsilon_min': self.epsilon_min,
+            'epsilon_decay': self.epsilon_decay,
+            'learning_rate': self.learning_rate,
+            'use_negative_rewards': self.use_negative_rewards,
+            'env_solved_at': []
+        }
+
+        scores = []
+        recent_scores = []
+
+        if self.epsilon_schedule == 'linear':
+            eps_values = list(np.linspace(self.epsilon, self.epsilon_min, self.episodes)[::-1])
+
+        solved = False
+        for episode in range(self.episodes):
+            if solved:
+                break
+
+            state = self.env.reset()
+            total_reward = 0
+            for iteration in range(self.max_steps):
+                # self.env.render()
+
+                old_state = state
+                action, action_type = self.perform_action(state)
+
+                state, reward, done, _ = self.env.step(action)
+                # Explicitly check if the position is >= 0.5 (goal position)
+                if state[0] >= 0.5:  # state[0] is the position in Mountain Car
+                    done = True
+                    reward += 100  # Optionally, give a bonus reward for reaching the goal
+                car_position = state[0]  # Update car position after each step
+                total_reward += reward  # Accumulate total reward for this episode
+
+                #if self.use_negative_rewards:
+                #    if done and iteration < 199:
+                #        reward *= -1
+
+                self.add_to_memory(old_state, action, reward, state, done)
+
+                #if done:
+                #    scores.append(iteration + 1)
+                #    meta['last_epsilon'] = self.epsilon
+
+                #    if len(scores) > 100:
+                #        recent_scores = scores[-100:]
+
+                #    avg_score = np.mean(recent_scores) if recent_scores else np.mean(scores)
+                #    print(
+                #        "\rEpisode {:03d} , epsilon={:.4f}, action type={}, score={:03d}, avg score={:.3f}".format(
+                #            episode, self.epsilon, action_type, iteration + 1, avg_score))
+
+                #    break
+
+                if len(self.memory) >= self.batch_size and iteration % self.update_after == 0:
+                    # print("Train step outer")
+                    self.train_step()
+
+                if iteration % self.update_target_after == 0:
+                    self.target_model.set_weights(self.model.get_weights())
+                
+                if done:
+                    break
+
+            #if np.mean(recent_scores) >= 195:
+            #    print("\nEnvironment solved in {} episodes.".format(episode), end="")
+            #    meta['env_solved_at'].append(episode)
+            #    solved = True
+            
+            # Record the total reward for the episode
+            scores.append(total_reward)
+            recent_scores = scores[-100:]  # Keep track of the last 100 scores
+            avg_score = np.mean(recent_scores)
+
+            print(
+                f"Episode {episode:03d}, epsilon={self.epsilon:.4f}, action type={action_type}, "
+                f"score={total_reward:.2f}, avg score={avg_score:.2f}, position={car_position:.2f}"
+            )
+
+
+            # Check if the environment is solved
+            if len(recent_scores) >= 100 and avg_score >= -110.0:
+                print(f"\nEnvironment solved in {episode + 1} episodes!")
+                meta['env_solved_at'].append(episode)
+                solved = True
+
+            if self.epsilon_schedule == 'fast':
+                self.epsilon = max(self.epsilon_min, self.epsilon_decay * self.epsilon)
+            elif self.epsilon_schedule == 'linear':
+                self.epsilon = eps_values.pop()
+
+            if self.save:
+                self.save_data(meta, scores)
+
+
 class RegressionFL:
     def __init__(
             self,
@@ -878,6 +1323,24 @@ def train_model(
             vector_form,
             alpha,
             env_name)
+    
+    elif env_name == Envs.MOUNTAINCAR:
+        step_loss = train_model_mountaincar(
+            model,
+            target_model,
+            batch_size,
+            memory,
+            circuit,
+            symbols,
+            ops,
+            gamma,
+            action_space,
+            encoding_depth,
+            opt,
+            multiply_output_by,
+            vector_form,
+            alpha,
+            env_name)
 
     elif env_name == Envs.FROZENLAKE:
         step_loss = train_model_frozenlake(
@@ -898,7 +1361,6 @@ def train_model(
             env_name)
 
     return step_loss
-
 
 def train_model_frozenlake(
         model,
@@ -958,6 +1420,61 @@ def train_model_frozenlake(
 
 
 def train_model_cartpole(
+        model,
+        target_model,
+        batch_size,
+        memory,
+        circuit,
+        symbols,
+        ops,
+        gamma,
+        action_space,
+        encoding_depth,
+        opt,
+        multiply_output_by,
+        vector_form,
+        alpha,
+        env_name):
+    samples = random.sample(memory, batch_size)
+    random.shuffle(samples)
+
+    batch_states = []
+    batch_targets = []
+    action_masks = []
+    action_matrix = np.eye(action_space)
+    for old_state, action, reward, state in samples:
+        old_q_vals = q_val(old_state, model, circuit, symbols, ops, encoding_depth, multiply_output_by, env_name)
+        if not vector_form:
+            target = reward
+        else:
+            target = copy.deepcopy(old_q_vals)
+            target[action] = reward
+
+        # add future reward for non-final states
+        if state is not None:
+            q_vals = q_val(state, target_model, circuit, symbols, ops, encoding_depth, multiply_output_by, env_name)
+            next_action = np.argmax(q_vals)
+
+            if not vector_form:
+                target += gamma * q_vals[next_action]
+            else:
+                target[action] += gamma * q_vals[next_action]
+
+        # print("Target:", target)
+        batch_states.append(state_to_circuit(old_state, encoding_depth, env_name=env_name))
+        batch_targets.append(target)
+
+        if not vector_form:
+            action_masks.append(action_matrix[action])
+
+    states_tensor = tfq.convert_to_tensor(batch_states)
+    targets_tensor = np.array(batch_targets)
+    step_loss = train_step(
+        states_tensor, targets_tensor, action_masks, model, opt, multiply_output_by, vector_form)
+
+    return step_loss
+
+def train_model_mountaincar(
         model,
         target_model,
         batch_size,
@@ -1109,6 +1626,45 @@ def perform_episodes(
             memory_len=memory_len,
             eps_schedule=eps_schedule,
             memory=memory)
+    
+    elif env_name == Envs.MOUNTAINCAR:
+        scores, loss_history, epsilons = perform_episodes_mountaincar(
+            episodes=episodes,
+            max_steps=max_steps,
+            env=env,
+            env_name=env_name,
+            model=model,
+            target_model=target_model,
+            circuit=circuit,
+            symbols=symbols,
+            readout_op=readout_op,
+            epsilon=epsilon,
+            fixed_memory=fixed_memory,
+            batch_size=batch_size,
+            model_update_prob=model_update_prob,
+            gamma=gamma,
+            action_space=action_space,
+            encoding_depth=encoding_depth,
+            opt=opt,
+            multiply_output_by=multiply_output_by,
+            update_target_after=update_target_after,
+            epsilon_schedule=epsilon_schedule,
+            epsilon_min=epsilon_min,
+            epsilon_decay=epsilon_decay,
+            save_as=save_as,
+            meta=meta,
+            plot_title=plot_title,
+            path=path,
+            vector_form=vector_form,
+            alpha=alpha,
+            fixed_update_after=fixed_update_after,
+            save_every=save_every,
+            scores=scores,
+            epsilons=epsilons,
+            loss_history=loss_history,
+            memory_len=memory_len,
+            eps_schedule=eps_schedule,
+            memory=memory)
 
     elif env_name == Envs.FROZENLAKE:
         scores, loss_history, epsilons = perform_episodes_frozenlake(
@@ -1150,7 +1706,6 @@ def perform_episodes(
             memory=memory)
 
     return scores, loss_history, epsilons
-
 
 def perform_episodes_cartpole(
         episodes=None,
@@ -1261,6 +1816,138 @@ def perform_episodes_cartpole(
         # If mean over the last 100 Games is >195, then success
         if np.mean(recent_scores) > 195 and iteration > 195:
             print("\nEnvironment solved in {} episodes.".format(episode), end="")
+            break
+
+        if epsilon_schedule == 'fast':
+            epsilon = max(epsilon_min, epsilon_decay * epsilon)
+        elif epsilon_schedule == 'linear':
+            epsilon = eps_schedule.pop()
+
+        if save_as and episode % save_every == 0:
+            save_data(save_as, meta, model, plot_title, scores, loss_history, epsilons, path=path)
+
+    return scores, loss_history, epsilons
+
+def perform_episodes_mountaincar(
+        episodes=None,
+        max_steps=None,
+        env=None,
+        env_name=None,
+        model=None,
+        target_model=None,
+        circuit=None,
+        symbols=None,
+        readout_op=None,
+        epsilon=None,
+        fixed_memory=None,
+        batch_size=None,
+        model_update_prob=None,
+        gamma=None,
+        action_space=None,
+        encoding_depth=None,
+        opt=None,
+        multiply_output_by=None,
+        update_target_after=None,
+        epsilon_schedule=None,
+        epsilon_min=None,
+        epsilon_decay=None,
+        save_as=None,
+        meta=None,
+        plot_title=None,
+        path=None,
+        vector_form=None,
+        alpha=None,
+        fixed_update_after=None,
+        save_every=10,
+        scores=[],
+        epsilons=[],
+        loss_history=[],
+        memory_len=10000,
+        eps_schedule=[],
+        memory=None):
+    recent_scores = [0]
+    train_loss = None
+
+    for episode in range(episodes):
+        state = env.reset()
+        total_reward = 0  # Accumulate rewards for Mountain Car
+        for iteration in range(max_steps):
+            old_state = state
+
+            action, action_type = perform_action(
+                state, model, circuit, symbols, readout_op, env,
+                encoding_depth, multiply_output_by, epsilon, env_name, gamma)
+
+            state, reward, done, _ = env.step(action)
+            # Explicitly check if the position is >= 0.5 (goal position)
+            if state[0] >= 0.5:  # state[0] is the position in Mountain Car
+                done = True
+                reward += 100  # Optional bonus reward for reaching the goal
+            total_reward += reward  # Update total reward
+
+            if done:
+                scores.append(total_reward)
+                epsilons.append(epsilon)
+
+                if train_loss:
+                    loss_history.append(train_loss)
+
+                if len(scores) > 100:
+                    recent_scores = scores[-100:]
+                print(
+                    "\rEpisode {:03d} , epsilon = {:.4f}, action type = {}, score = {:03d}, position = {:.2f}".format(
+                        episode, epsilon, action_type, total_reward, state[0]))
+
+                #if iteration != 199:
+                #    reward = -1
+                #if iteration == 199:
+                #    reward = 2
+
+                memory = add_to_memory(
+                    memory, old_state, action, reward, None, memory_len, fixed_memory)
+                break
+
+            # Add the observation to replay memory
+            memory = add_to_memory(
+                memory, old_state, action, reward, state, memory_len, fixed_memory)
+
+            train_now = False
+            if fixed_update_after and iteration % fixed_update_after == 0:
+                train_now = True
+            elif model_update_prob and np.random.random() < model_update_prob:
+                train_now = True
+
+            if len(memory) >= batch_size and train_now:
+                train_loss = train_model(
+                    model,
+                    target_model,
+                    batch_size,
+                    memory,
+                    circuit,
+                    symbols,
+                    readout_op,
+                    gamma,
+                    action_space,
+                    encoding_depth,
+                    opt,
+                    multiply_output_by,
+                    vector_form,
+                    alpha,
+                    env_name)
+
+                print("\tIteration: {}, Loss: {}".format(iteration, train_loss))
+
+            if iteration % update_target_after == 0:
+                target_model.set_weights(model.get_weights())
+
+        # If mean over the last 100 Games is >195, then success
+        #if np.mean(recent_scores) > 195 and iteration > 195:
+        #    print("\nEnvironment solved in {} episodes.".format(episode), end="")
+        #    break
+
+        # Success condition for Mountain Car
+        if len(recent_scores) >= 100 and np.mean(recent_scores) >= -110.0:
+            print("\nEnvironment solved in {} episodes.".format(episode + 1))
             break
 
         if epsilon_schedule == 'fast':

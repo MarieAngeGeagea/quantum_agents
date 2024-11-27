@@ -79,11 +79,12 @@ def state_to_circuit(state, depth=2, env_name=None, enc_type=None):
     circuit = None
     if env_name == Envs.CARTPOLE:
         circuit = state_to_circuit_continuous(state, depth, enc_type=enc_type)
+    elif env_name == Envs.MOUNTAINCAR:
+        circuit = state_to_circuit_continuous_mc(state, depth, enc_type=enc_type)
     elif env_name == Envs.FROZENLAKE:
         circuit = state_to_circuit_discrete(state, 4)
 
     return circuit
-
 
 def state_to_circuit_discrete(state, observation_space_size):
     enumerated_bitstrings = generate_all_bitstrings_of_size(observation_space_size)
@@ -113,6 +114,20 @@ def state_to_circuit_continuous(state_vec, depth, enc_type, scale_range=True):
 
     return circuit
 
+def state_to_circuit_continuous_mc(state_vec, depth, enc_type, scale_range=True):
+    if scale_range:
+        scaled_state = [np.arctan(x) for x in state_vec]
+    else:
+        scaled_state = state_vec
+
+    qubits = [cirq.GridQubit(0, i) for i in range(len(state_vec))]
+
+    if enc_type == EncType.HIDDEN_SHIFT:
+        circuit = state_to_circuit_hidden_shift_boolean(scaled_state, depth, qubits)
+    elif enc_type == EncType.CONT_X:
+        circuit = state_to_circuit_cont_x(scaled_state, depth, qubits)
+
+    return circuit
 
 def state_to_circuit_hidden_shift_boolean(state, depth, qubits):
     circuit = cirq.Circuit()
@@ -158,7 +173,6 @@ def create_q_circuit(n_qubits, n_layers=5):
         circuit.append(cirq.ry(symbols.pop())(qubits[j]))
 
     return circuit, return_symb
-
 
 def hwe_layer(qubits, symbols):
     circuit = cirq.Circuit()
@@ -256,11 +270,14 @@ def construct_readout_ops(qubits, env_name):
     if env_name == Envs.CARTPOLE:
         readout_op = [cirq.Z(qubits[0]) * cirq.Z(qubits[1]),
                       cirq.Z(qubits[2]) * cirq.Z(qubits[3])]
+    elif env_name == Envs.MOUNTAINCAR:
+    # Readout for Mountain Car: Individual measurement of each qubit
+    # since Mountain Car's observation space is 2D (position, velocity)
+        readout_op = [cirq.Z(qubit) for qubit in qubits]
     elif env_name == Envs.FROZENLAKE:
         readout_op = [cirq.Z(qubit) for qubit in qubits]
 
     return readout_op
-
 
 def perform_action(
         state, model, circuit, symbols, ops, env, encoding_depth,
@@ -290,6 +307,21 @@ def q_val(state, model, circuit, symbols, ops, encoding_depth, multiply_output_b
                 multiply_output_by,
                 multiply_output_by]))
 
+        output = action_preds.numpy()[0]
+
+    elif env_name == Envs.MOUNTAINCAR:
+        # Convert the circuit to a TensorFlow tensor
+        in_state = tfq.convert_to_tensor([state_circ])
+        # Get model predictions
+        model_prediction = model(in_state)
+        # Scale the predictions to the valid range
+        scaled_preds = tf.divide(tf.add(model_prediction, 1), 2)
+        # Multiply by the output factor for all actions
+        action_preds = tf.multiply(
+            scaled_preds,
+            np.asarray([multiply_output_by, multiply_output_by, multiply_output_by])
+        )
+        # Extract Q-values
         output = action_preds.numpy()[0]
 
     elif env_name == Envs.FROZENLAKE:
@@ -377,3 +409,4 @@ def scaled_mse_loss(y_true, y_predicted):
     scaled_to_probs = tf.multiply(scaled_preds, np.asarray([-1, 1]))
     probs = tf.add(scaled_to_probs, np.asarray([1, 0]))
     return tf.keras.losses.mse(y_true, probs)
+

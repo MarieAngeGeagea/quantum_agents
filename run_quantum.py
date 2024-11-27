@@ -3,7 +3,7 @@ from src.utils.limit_thread_usage import set_thread_usage_limit
 set_thread_usage_limit(10, tf)
 
 from config import BASE_PATH, Envs
-from parallelize import parallelize_cp_q
+from parallelize import parallelize_mc_q
 
 
 hyperparams = {
@@ -21,15 +21,15 @@ hyperparams = {
     'circuit_depth': [5],
     'epsilon_schedule': ['fast'],
     'use_reuploading': True,
-    'trainable_scaling': False,
+    'trainable_scaling': True,
     'trainable_output': True,
     'output_factor': 1,
-    'reps': 10,
-    'env': Envs.CARTPOLE,
+    'reps': 1,
+    'env': Envs.MOUNTAINCAR,
     'save': True,
     'test': False
 }
 
 
 if __name__ == '__main__':
-    parallelize_cp_q(hyperparams, BASE_PATH + 'cartpole/ablation/')
+    parallelize_mc_q(hyperparams, BASE_PATH + 'mountaincar/mountaincarQ/')

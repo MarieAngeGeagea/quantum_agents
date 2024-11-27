@@ -1,3 +1,4 @@
+
 import multiprocessing
 import random
 
@@ -5,7 +6,7 @@ import time
 from copy import copy
 
 from config import BASE_PATH, Envs
-from src.quantum.training import RegressionFL, QLearning, QLearningFL, QLearningCartpole, QLearningCartpoleClassical
+from src.quantum.training import RegressionFL, QLearning, QLearningFL, QLearningCartpole, QLearningCartpoleClassical, QLearningMountainCar, QLearningMountainCarClassical 
 
 
 def parallelize_fl_regression(hyperparams, path=BASE_PATH):
@@ -391,3 +392,213 @@ def _run_cp_c(args):
             test=test)
 
         cpc.perform_episodes()
+
+
+def parallelize_mc_q(hyperparams, path=BASE_PATH):
+    experiments = ([
+        hyperparams,
+        path,
+        episodes,
+        batch_size,
+        gamma,
+        circuit_depth,
+        update_after,
+        update_target_after,
+        epsilon,
+        epsilon_schedule,
+        epsilon_min,
+        epsilon_decay,
+        learning_rate,
+        learning_rate_in,
+        learning_rate_out]
+
+        for episodes in hyperparams.get('episodes')
+        for batch_size in hyperparams.get('batch_size')
+        for gamma in hyperparams.get('gamma')
+        for circuit_depth in hyperparams.get('circuit_depth')
+        for update_after in hyperparams.get('update_after')
+        for update_target_after in hyperparams.get('update_target_after')
+        for epsilon in hyperparams.get('epsilon')
+        for epsilon_schedule in hyperparams.get('epsilon_schedule')
+        for epsilon_min in hyperparams.get('epsilon_min')
+        for epsilon_decay in hyperparams.get('epsilon_decay')
+        for learning_rate in hyperparams.get('learning_rate')
+        for learning_rate_in in hyperparams.get('learning_rate_in')
+        for learning_rate_out in hyperparams.get('learning_rate_out')
+    )
+
+    # pool = multiprocessing.Pool()
+    # pool.map(_run_cp_q, experiments)
+    # pool.close()
+    # pool.join()
+
+    _run_mc_q(list(experiments)[0])
+
+    return None
+
+
+def _run_mc_q(args):
+    (
+        hyperparams,
+        path,
+        episodes,
+        batch_size,
+        gamma,
+        circuit_depth,
+        update_after,
+        update_target_after,
+        epsilon,
+        epsilon_schedule,
+        epsilon_min,
+        epsilon_decay,
+        learning_rate,
+        learning_rate_in,
+        learning_rate_out) = args
+
+    save = hyperparams.get('save', True)
+    save_as = hyperparams.get('save_as')
+    test = hyperparams.get('test', False)
+
+    if save_as is None:
+        timestamp = time.localtime()
+        save_as = time.strftime("%Y-%m-%d_%H-%M-%S", timestamp) + '_' + str(random.randint(0, 1000))
+
+    if test:
+        save_as = 'dummy'
+
+    hps = {
+        'episodes': episodes,
+        'batch_size': batch_size,
+        'gamma': gamma,
+        'circuit_depth': circuit_depth,
+        'update_after': update_after,
+        'update_target_after': update_target_after,
+        'epsilon': epsilon,
+        'epsilon_schedule': epsilon_schedule,
+        'epsilon_min': epsilon_min,
+        'epsilon_decay': epsilon_decay,
+        'learning_rate': learning_rate,
+        'learning_rate_in': learning_rate_in,
+        'learning_rate_out': learning_rate_out,
+        'use_negative_rewards': hyperparams.get('use_negative_rewards', False),
+        'use_reuploading': hyperparams.get('use_reuploading', True),
+        'trainable_scaling': hyperparams.get('trainable_scaling', True),
+        'trainable_output': hyperparams.get('trainable_output', True),
+        'output_factor': hyperparams.get('output_factor', 1)
+    }
+
+    for i in range(hyperparams.get('reps', 1)):
+        save_as_instance = copy(save_as)
+        if hyperparams.get('reps', 1) > 1:
+            save_as_instance += f'_{i}'
+
+        mcq = QLearningMountainCar(
+            hyperparams=hps,
+            env_name=Envs.MOUNTAINCAR,
+            save=save,
+            save_as=save_as_instance,
+            path=path,
+            test=test)
+
+        mcq.perform_episodes()
+
+
+def parallelize_mc_c(hyperparams, path=BASE_PATH):
+    experiments = ([
+        hyperparams,
+        path,
+        episodes,
+        batch_size,
+        gamma,
+        update_after,
+        update_target_after,
+        epsilon,
+        epsilon_schedule,
+        epsilon_min,
+        epsilon_decay,
+        learning_rate,
+        n_hidden_layers,
+        hidden_layer_config]
+
+        for episodes in hyperparams.get('episodes')
+        for batch_size in hyperparams.get('batch_size')
+        for gamma in hyperparams.get('gamma')
+        for update_after in hyperparams.get('update_after')
+        for update_target_after in hyperparams.get('update_target_after')
+        for epsilon in hyperparams.get('epsilon')
+        for epsilon_schedule in hyperparams.get('epsilon_schedule')
+        for epsilon_min in hyperparams.get('epsilon_min')
+        for epsilon_decay in hyperparams.get('epsilon_decay')
+        for learning_rate in hyperparams.get('learning_rate')
+        for n_hidden_layers in hyperparams.get('n_hidden_layers')
+        for hidden_layer_config in hyperparams.get('hidden_layer_config')
+    )
+
+    # pool = multiprocessing.Pool()
+    # pool.map(_run_cp_q, experiments)
+    # pool.close()
+    # pool.join()
+
+    _run_mc_c(list(experiments)[0])
+
+    return None
+
+
+def _run_mc_c(args):
+    (
+        hyperparams,
+        path,
+        episodes,
+        batch_size,
+        gamma,
+        update_after,
+        update_target_after,
+        epsilon,
+        epsilon_schedule,
+        epsilon_min,
+        epsilon_decay,
+        learning_rate,
+        n_hidden_layers,
+        hidden_layer_config) = args
+
+    save = hyperparams.get('save', True)
+    save_as = hyperparams.get('save_as')
+    test = hyperparams.get('test', False)
+
+    if save_as is None:
+        timestamp = time.localtime()
+        save_as = time.strftime("%Y-%m-%d_%H-%M-%S", timestamp) + '_' + str(random.randint(0, 1000))
+
+    if test:
+        save_as = 'dummy'
+
+    hps = {
+        'episodes': episodes,
+        'batch_size': batch_size,
+        'gamma': gamma,
+        'update_after': update_after,
+        'update_target_after': update_target_after,
+        'epsilon': epsilon,
+        'epsilon_schedule': epsilon_schedule,
+        'epsilon_min': epsilon_min,
+        'epsilon_decay': epsilon_decay,
+        'learning_rate': learning_rate,
+        'n_hidden_layers': n_hidden_layers,
+        'hidden_layer_config': hidden_layer_config,
+        'use_negative_rewards': hyperparams.get('use_negative_rewards', False)
+    }
+
+    for i in range(hyperparams.get('reps', 1)):
+        save_as_instance = copy(save_as)
+        if hyperparams.get('reps', 1) > 1:
+            save_as_instance += f'_{i}'
+
+        mcc = QLearningMountainCarClassical(
+            hyperparams=hps,
+            env_name=Envs.MOUNTAINCAR,
+            save=save,
+            save_as=save_as_instance,
+            path=path,
+            test=test)
+
+        mcc.perform_episodes()
