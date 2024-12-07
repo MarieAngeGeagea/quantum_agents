@@ -3,6 +3,8 @@
 Code accompanying the paper: https://arxiv.org/abs/2103.15084
 
 To train a quantum agent on the CartPole environment, run *run_quantum.py* and set the hyperparameters in the file:
+Codes provided in this repo have been adapted and taken from: https://github.com/askolik/quantum_agents
+
 
     hyperparams = {
         'episodes': [5000],
