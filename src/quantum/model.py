@@ -273,7 +273,9 @@ def construct_readout_ops(qubits, env_name):
     elif env_name == Envs.MOUNTAINCAR:
     # Readout for Mountain Car: Individual measurement of each qubit
     # since Mountain Car's observation space is 2D (position, velocity)
-        readout_op = [cirq.Z(qubit) for qubit in qubits]
+        readout_op = [cirq.Z(qubits[0]) * cirq.Z(qubits[1]),
+                      cirq.Z(qubits[0]),
+                      cirq.Z(qubits[1])]
     elif env_name == Envs.FROZENLAKE:
         readout_op = [cirq.Z(qubit) for qubit in qubits]
 

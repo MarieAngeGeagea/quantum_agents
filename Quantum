@@ -1,0 +1,68 @@
+Model: "Q-function"
+__________________________________________________________________________________________________
+Layer (type)                    Output Shape         Param #     Connected to                     
+==================================================================================================
+input (InputLayer)              [(None, 2)]          0                                            
+__________________________________________________________________________________________________
+quantum_state (InputLayer)      [(None,)]            0                                            
+__________________________________________________________________________________________________
+scalable_data_reuploading (Scal (None, 60)           60          input[0][0]                      
+__________________________________________________________________________________________________
+PQC (ControlledPQC)             (None, 3)            0           quantum_state[0][0]              
+                                                                 scalable_data_reuploading[0][0]  
+__________________________________________________________________________________________________
+Q-values (Sequential)           (None, 3)            3           PQC[0][0]                        
+==================================================================================================
+Total params: 63
+Trainable params: 63
+Non-trainable params: 0
+__________________________________________________________________________________________________
+Episode 000, epsilon=1.0000, action type=random, score=-200.00, avg score=-200.00, position=-0.42
+Episode 001, epsilon=0.9900, action type=random, score=-200.00, avg score=-200.00, position=-0.58
+Episode 002, epsilon=0.9801, action type=random, score=-200.00, avg score=-200.00, position=-0.61
+Episode 003, epsilon=0.9703, action type=random, score=-200.00, avg score=-200.00, position=-0.49
+Episode 004, epsilon=0.9606, action type=random, score=-200.00, avg score=-200.00, position=-0.58
+Episode 005, epsilon=0.9510, action type=random, score=-200.00, avg score=-200.00, position=-0.51
+Episode 006, epsilon=0.9415, action type=random, score=-200.00, avg score=-200.00, position=-0.45
+Episode 007, epsilon=0.9321, action type=random, score=-200.00, avg score=-200.00, position=-0.65
+Episode 008, epsilon=0.9227, action type=random, score=-200.00, avg score=-200.00, position=-0.56
+Episode 009, epsilon=0.9135, action type=random, score=-200.00, avg score=-200.00, position=-0.66
+Episode 010, epsilon=0.9044, action type=random, score=-200.00, avg score=-200.00, position=-0.38
+Episode 011, epsilon=0.8953, action type=random, score=-200.00, avg score=-200.00, position=-0.50
+Episode 012, epsilon=0.8864, action type=random, score=-200.00, avg score=-200.00, position=-0.38
+Episode 013, epsilon=0.8775, action type=random, score=-200.00, avg score=-200.00, position=-0.62
+Episode 014, epsilon=0.8687, action type=random, score=-200.00, avg score=-200.00, position=-0.51
+Episode 015, epsilon=0.8601, action type=random, score=-200.00, avg score=-200.00, position=-0.39
+Episode 016, epsilon=0.8515, action type=random, score=-200.00, avg score=-200.00, position=-0.70
+Episode 017, epsilon=0.8429, action type=random, score=-200.00, avg score=-200.00, position=-0.43
+Episode 018, epsilon=0.8345, action type=random, score=-200.00, avg score=-200.00, position=-0.63
+Episode 019, epsilon=0.8262, action type=random, score=-200.00, avg score=-200.00, position=-0.41
+Episode 020, epsilon=0.8179, action type=random, score=-200.00, avg score=-200.00, position=-0.75
+Episode 021, epsilon=0.8097, action type=random, score=-200.00, avg score=-200.00, position=-0.51
+Episode 022, epsilon=0.8016, action type=random, score=-200.00, avg score=-200.00, position=-0.60
+Episode 023, epsilon=0.7936, action type=argmax, score=-200.00, avg score=-200.00, position=-0.63
+Episode 024, epsilon=0.7857, action type=random, score=-200.00, avg score=-200.00, position=-0.78
+Episode 025, epsilon=0.7778, action type=argmax, score=-200.00, avg score=-200.00, position=-0.50
+Episode 026, epsilon=0.7700, action type=random, score=-200.00, avg score=-200.00, position=-0.70
+Episode 027, epsilon=0.7623, action type=random, score=-200.00, avg score=-200.00, position=-0.46
+Episode 028, epsilon=0.7547, action type=argmax, score=-200.00, avg score=-200.00, position=-0.51
+Episode 029, epsilon=0.7472, action type=random, score=-200.00, avg score=-200.00, position=-0.38
+Episode 030, epsilon=0.7397, action type=random, score=-200.00, avg score=-200.00, position=-0.34
+Episode 031, epsilon=0.7323, action type=random, score=-200.00, avg score=-200.00, position=-0.51
+Episode 032, epsilon=0.7250, action type=argmax, score=-200.00, avg score=-200.00, position=-0.59
+Episode 033, epsilon=0.7177, action type=argmax, score=-200.00, avg score=-200.00, position=-0.62
+Episode 034, epsilon=0.7106, action type=random, score=-200.00, avg score=-200.00, position=-0.39
+Episode 035, epsilon=0.7034, action type=random, score=-200.00, avg score=-200.00, position=-0.50
+Episode 036, epsilon=0.6964, action type=random, score=-200.00, avg score=-200.00, position=-0.38
+Episode 037, epsilon=0.6894, action type=argmax, score=-200.00, avg score=-200.00, position=-0.48
+Episode 038, epsilon=0.6826, action type=random, score=-200.00, avg score=-200.00, position=-0.42
+Episode 039, epsilon=0.6757, action type=random, score=-200.00, avg score=-200.00, position=-0.61
+Episode 040, epsilon=0.6690, action type=random, score=-200.00, avg score=-200.00, position=-0.50
+Episode 041, epsilon=0.6623, action type=random, score=-200.00, avg score=-200.00, position=-0.67
+Episode 042, epsilon=0.6557, action type=argmax, score=-200.00, avg score=-200.00, position=-0.39
+Episode 043, epsilon=0.6491, action type=argmax, score=-200.00, avg score=-200.00, position=-0.47
+Episode 044, epsilon=0.6426, action type=random, score=-200.00, avg score=-200.00, position=-0.60
+Episode 045, epsilon=0.6362, action type=argmax, score=-200.00, avg score=-200.00, position=-0.56
+Episode 046, epsilon=0.6298, action type=argmax, score=-200.00, avg score=-200.00, position=-0.46
+Episode 047, epsilon=0.6235, action type=argmax, score=-200.00, avg score=-200.00, position=-0.46
+Episode 048, epsilon=0.6173, action type=random, score=-200.00, avg score=-200.00, position=-0.57
